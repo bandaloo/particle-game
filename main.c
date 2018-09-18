@@ -149,6 +149,7 @@ int main(int argc, char *argv[]) {
             int ondraw = 0;
             if (s == 0) {
                 rdeltatime = leftovertime;
+		onstep = 1;
             } else if (s == steps + 1) {
                 rdeltatime = extratime;
                 ondraw = 1;
