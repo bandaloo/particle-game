@@ -11,6 +11,11 @@
 #define SIM_FPS 300
 #define TIME_PER_STEP (double) (1000.0 / SIM_FPS)
 #define MAX_STEPS 10
+#define NUM_MASSES 20
+#define WATER_DEPTH 500
+
+#define T_TEAR 0
+#define T_WATER 1
 
 int bgcolor[] = {30, 30, 30};
 int pcolor[] = {91, 187, 255};
@@ -28,6 +33,7 @@ struct particle {
     int r;
     int g;
     int b;
+    int type;
 };
 
 struct node {
@@ -47,7 +53,6 @@ double randdouble() {
 }
 
 
-
 int clickx, clicky;
 int helddown;
 long unsigned int timediff, currtime, prevtime = 0;
@@ -60,7 +65,51 @@ SDL_Window * window;
 SDL_Renderer * renderer;
 
 int rswidth, rsheight, sr;
-// SDL_RenderCopyEx( gRenderer, mTexture, clip, &renderQuad, angle, center, flip );
+double waterdepth = WATER_DEPTH;
+
+struct particle springmasses[NUM_MASSES];
+
+void setspringmasses() { 
+    for (int i = 0; i < NUM_MASSES; i++) {
+        springmasses[i] = (struct particle) {
+            .x = SCREEN_WIDTH / (NUM_MASSES - 1) * i,
+            .y = WATER_DEPTH,
+            .velx = 0,
+            .vely = 0,
+            .accx = 0,
+            .accy = 0,
+            .drag = 0.005,
+            .lifetime = 1000000,
+            .alpha = 200,
+            .r = 255,
+            .g = 0,
+            .b = 0,
+            .type = T_WATER
+        };
+    }
+}
+
+void updatespringaccs() {
+    printf("teststart\n");
+    for (int i = 1; i < NUM_MASSES - 1; i++) {
+        double yleft = springmasses[i - 1].y;
+        double ymiddle = springmasses[i].y;
+        double yright = springmasses[i + 1].y;
+        springmasses[i].accy = ((yleft - ymiddle) + (yright - ymiddle)) / 1000;
+        printf("%f\n", ymiddle);
+    }
+    printf("testend\n");
+}
+
+void addspringparticles() {
+    struct node * currnode = head;
+    for (int i = 0; i < NUM_MASSES; i++) {
+        struct node * newnode = malloc(sizeof(struct node));
+        newnode->particle = springmasses + i;
+        newnode->next = head->next;
+        head->next = newnode;
+    }
+}
 
 void drawimage(double x, double y, SDL_Texture * image, int imgwidth, int imgheight) {
     SDL_Rect trect = {(x - imgwidth / 4) * sr, (y - imgheight / 4) * sr, imgwidth / 2 * sr, imgheight / 2 * sr};
@@ -84,6 +133,7 @@ void drawsprite(double x, double y, struct sprite * sprite, double angle, double
 //void drawimageex(double x, double y, SDL_T
 
 int main(int argc, char *argv[]) {
+    setspringmasses();
     head = malloc(sizeof(struct node));
     tail = malloc(sizeof(struct node));
     tail->next = NULL;
@@ -115,6 +165,8 @@ int main(int argc, char *argv[]) {
     SDL_Texture ** tearimages = malloc(sizeof(SDL_Texture *));
     tearimages[0] = tear;
     makesprite(&tearsprite, tearimages);
+
+    addspringparticles();
     
     SDL_Event event;
     int quit = 0;
@@ -164,6 +216,7 @@ int main(int argc, char *argv[]) {
             // temp
             int counter = 0;
             printf("rdeltatime %f\n", rdeltatime);
+            updatespringaccs();
             while (currnode->next != NULL) {
             
                 int destroyed = 0;
@@ -174,6 +227,22 @@ int main(int argc, char *argv[]) {
                     currnode->particle->velx += currnode->particle->accx - currnode->particle->drag * currnode->particle->velx * rdeltatime;
                     currnode->particle->vely += currnode->particle->accy - currnode->particle->drag * currnode->particle->vely * rdeltatime;
                     currnode->particle->lifetime -= rdeltatime;
+                    if (currnode->particle->type == T_TEAR) {
+                        // figure out which water node to push
+                        double pos = currnode->particle->x;
+                        pos += SCREEN_WIDTH / NUM_MASSES / 2;
+                        int index = (int) (pos / (SCREEN_WIDTH / (NUM_MASSES - 1)));
+                        printf("index%d\n", index);
+                        if (index >= 0 && index <= NUM_MASSES - 1) {
+                            if (springmasses[index].y < currnode->particle->y) {
+                                currnode->particle->lifetime = -1;
+                                if (index != 0 && index != NUM_MASSES - 1)
+                                    springmasses[index].y += 10;
+                                springmasses[0].y -= 0.01;
+                                springmasses[NUM_MASSES - 1].y -= 0.01;
+                            }
+                        }
+                    }
                     if (currnode->particle->lifetime < 0) {
                         prevnode->next = currnode->next;
                         free(currnode->particle);
@@ -209,7 +278,6 @@ int main(int argc, char *argv[]) {
             if (ondraw) {
                 drawsprite(clickx, clicky, sadsprite, 0.0, 1.0);
             }
-    //        drawimage(clickx, clicky, sadface, imgwidth, imgheight);
             if (helddown && onstep) {
                 int particlesperhold = 3;
                 for (int i = 0; i < particlesperhold; i++) {
@@ -223,7 +291,6 @@ int main(int argc, char *argv[]) {
                     particle->y = (double) clicky;
                     particle->velx = cos(randdir) * (double) randspeed / 10;
                     particle->vely = sin(randdir) * (double) randspeed / 10;
-    //                printf("%f\n", randspeed);
                     particle->accx = 0;
                     particle->accy = 0.01;
                     particle->drag = 0.005;
@@ -232,6 +299,7 @@ int main(int argc, char *argv[]) {
                     particle->r = pcolor[0];
                     particle->g = pcolor[1];
                     particle->b = pcolor[2];
+                    particle->type = T_TEAR;
                     newnode->next = tail;
                     newnode->particle = particle;
                     prevnode->next = newnode;
