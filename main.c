@@ -225,7 +225,7 @@ int main(int argc, char *argv[]) {
                     particle->vely = sin(randdir) * (double) randspeed / 10;
     //                printf("%f\n", randspeed);
                     particle->accx = 0;
-                    particle->accy = 0.1;
+                    particle->accy = 0.01;
                     particle->drag = 0.005;
                     particle->lifetime = 1000 + randdouble() * 2000;
                     particle->alpha = 100;
