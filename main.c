@@ -6,7 +6,6 @@
 
 #define SCREEN_WIDTH 1080
 #define SCREEN_HEIGHT 720
-#define VSCALAR 20000000
 #define SPRING_SCALAR 1700
 #define PI 3.14159265
 #define SIM_FPS 300
@@ -20,9 +19,28 @@
 #define T_TEAR 0
 #define T_WATER 1
 #define T_LETTER 2
+#define T_BUBBLE 3
 
 int bgcolor[] = {30, 30, 30};
-int pcolor[] = {91, 187, 255};
+
+int clickx, clicky;
+int helddown;
+int gameover = 0;
+int onstep, ondraw;
+long unsigned int timediff, currtime, prevtime = 0;
+double extratime;
+double deltatime;
+double leftovertime = 0;
+double prevmody, nextmody;
+struct node * head;
+struct node * tail;
+SDL_Window * window;
+SDL_Renderer * renderer;
+
+struct sprite * sadsprite, * alphabetsprite, * tearsprite, * bubblesprite;
+
+int rswidth, rsheight, sr;
+double waterdepth = WATER_DEPTH;
 
 char * messages[WORD_AMOUNT] = {
     "hello world!",
@@ -45,8 +63,12 @@ char * messages[WORD_AMOUNT] = {
 int messagecounter = 0;
 
 struct particle {
+    struct sprite * sprite;
+    void (* step)(struct particle *);
     double x;
     double y;
+    double angle;
+    double size;
     double velx;
     double vely;
     double accx;
@@ -73,6 +95,8 @@ struct sprite {
     int counter;
 };
 
+struct particle springmasses[NUM_MASSES];
+
 double randdouble() {
     return (double) rand() / RAND_MAX;
 }
@@ -81,29 +105,33 @@ double doublemod(double a, double b) {
     return a - ((int) (a / b)) * b;
 }
 
+int getwaterindex(double x) {
+    double pos = x + SCREEN_WIDTH / NUM_MASSES / 2;
+    return (int) (pos / (SCREEN_WIDTH / (NUM_MASSES - 1)));
+}
 
-int clickx, clicky;
-int helddown;
-int gameover = 0;
-long unsigned int timediff, currtime, prevtime = 0;
-double extratime;
-double deltatime;
-double leftovertime = 0;
-struct node * head;
-struct node * tail;
-SDL_Window * window;
-SDL_Renderer * renderer;
+// TODO figure out if particles are getting destroyed fast enough, not pushing water twice
 
-int rswidth, rsheight, sr;
-double waterdepth = WATER_DEPTH;
+int isunderwater(double x, double y) {
+    int index = getwaterindex(x);
+    return index >= 0 && index <= NUM_MASSES - 1 && springmasses[index].y < y;
+}
 
-struct particle springmasses[NUM_MASSES];
+void stepalphabet(struct particle * particle) {
+    if (ondraw) {
+        particle->alpha = (double) (particle->lifetime / 10000.0 * 255);
+    }
+}
 
 void setspringmasses() { 
     for (int i = 0; i < NUM_MASSES; i++) {
         springmasses[i] = (struct particle) {
+            .sprite = tearsprite,
+            .step = NULL,
             .x = SCREEN_WIDTH / (NUM_MASSES - 1) * i,
             .y = WATER_DEPTH,
+            .angle = 0,
+            .size = 1.0,
             .velx = 0,
             .vely = 0,
             .accx = 0,
@@ -137,20 +165,21 @@ void addparticle(struct particle * particle) {
 }
 
 void addspringparticles() {
-// TODO check if i need this 
-    struct node * currnode = head;
     for (int i = 0; i < NUM_MASSES; i++) {
         addparticle(springmasses + i);
     }
 }
 
-// make these double
+
 struct particle * makeletterparticle(double x, double y, char c) {
     int clip = c - 'a';
     struct particle * particle = malloc(sizeof(struct particle));
     *particle = (struct particle) {
+        .sprite = alphabetsprite,
+        .step = stepalphabet,
         .x = x,
         .y = y,
+        .angle = 0,
         .velx = randdouble() / 50,
         .vely = randdouble() / 50,
         .accx = 0,
@@ -167,13 +196,61 @@ struct particle * makeletterparticle(double x, double y, char c) {
     return particle;
 }
 
+void drawword(double x, double y, char * str) {
+    int len = strlen(str);
+    for (int i = 0; i < len; i++) {
+        char c = str[i];
+        if (c == '?') c = 'a' + 28;
+        else if (c == '!') c = 'a' + 27;
+        else if (c == '.') c = 'a' + 26;
+        if (c != ' ') {
+            addparticle(makeletterparticle(x + i * 20, y, c));
+        }
+    }
+}
+
+void raisewater() {
+    springmasses[0].y -= 0.01;
+    // TODO moving the water level should probably be in its own function
+    double prevmod = doublemod(springmasses[NUM_MASSES - 1].y, WORD_INTERVAL);
+    springmasses[NUM_MASSES - 1].y -= 0.01;
+    double nextmod = doublemod(springmasses[NUM_MASSES - 1].y, WORD_INTERVAL);
+    if (nextmod > prevmod) {
+        if (!gameover)
+            drawword(clickx - 100, clicky - 50, messages[messagecounter]);
+        if (messagecounter < WORD_AMOUNT - 1)
+            messagecounter++;
+        else
+            gameover = 1;
+    }
+}
+
+void steptear(struct particle * particle) {
+    if (ondraw) {
+        particle->angle = atan2(particle->vely, particle->velx);
+    }
+    if (onstep) {
+        int index = getwaterindex(particle->x);
+        if (isunderwater(particle->x, particle->y)) {
+            particle->lifetime = -1;
+            if (index != 0 && index != NUM_MASSES - 1)
+                springmasses[index].vely += 0.05;
+            raisewater();
+        }
+    }
+}
+
 struct particle * maketearparticle(double x, double y) {
     struct particle * particle = malloc(sizeof(struct particle));
     double randdir = randdouble() * 2 * PI;
     double randspeed = randdouble();
     *particle = (struct particle) {
+        .sprite = tearsprite,
+        .step = steptear,
         .x = x,
         .y = y,
+        .angle = 0,
+        .size = 1.0,
         .velx = cos(randdir) * randspeed,
         .vely = sin(randdir) * randspeed,
         .accx = 0,
@@ -181,29 +258,50 @@ struct particle * maketearparticle(double x, double y) {
         .drag = 0.005,
         .lifetime = 1000 * randdouble() * 1000,
         .alpha = 100,
-        .r = pcolor[0],
-        .g = pcolor[1],
-        .b = pcolor[2],
+        .r = 91,
+        .g = 187,
+        .b = 255,
         .type = T_TEAR,
         .clip = 0
     };
     return particle;
 }
 
-void addletterparticle(int x, int y, char c) {
-    struct node * newnode = malloc(sizeof(struct node));
-    struct particle * particle = makeletterparticle(x, y, c);
-    newnode->particle = particle;
-    // TODO make an add particle function
-    newnode->next = head->next;
-    head->next = newnode;
+struct particle * makebubbleparticle(double x, double y) {
+    struct particle * particle = malloc(sizeof(struct particle));
+    double randdir = randdouble() * 2 * PI;
+    double randspeed = randdouble();
+    *particle = (struct particle) {
+        .sprite = bubblesprite,
+        .step = NULL,
+        .x = x,
+        .y = y,
+        .angle = 0,
+        .size = 1.0,
+        .velx = cos(randdir) * randspeed * 4,
+        .vely = sin(randdir) * randspeed * 2,
+        .accx = 0,
+        .accy = -0.01,
+        .drag = 0.05,
+        .lifetime = 300,
+        .alpha = 100,
+        .r = 255,
+        .g = 255,
+        .b = 255,
+        .type = T_BUBBLE,
+        .clip = 0
+    };
+    return particle;
 }
-
-        
 
 void drawimage(double x, double y, SDL_Texture * image, int imgwidth, int imgheight) {
     SDL_Rect trect = {(x - imgwidth / 4) * sr, (y - imgheight / 4) * sr, imgwidth / 2 * sr, imgheight / 2 * sr};
     SDL_RenderCopy(renderer, image, NULL, &trect);
+}
+
+void setcolors(struct particle * particle) {
+    SDL_SetTextureColorMod(particle->sprite->images[particle->sprite->counter], particle->r, particle->g, particle->b);
+    SDL_SetTextureAlphaMod(particle->sprite->images[particle->sprite->counter], particle->alpha);
 }
 
 void makesprite(struct sprite ** sprite, SDL_Texture ** images) {
@@ -221,24 +319,20 @@ void drawsprite(double x, double y, struct sprite * sprite, double angle, double
     SDL_RenderCopyEx(renderer, sprite->images[sprite->counter], &crect, &trect, degrees, NULL, SDL_FLIP_NONE);
 }
 
-void drawword(double x, double y, char * str) {
-    int len = strlen(str);
-    for (int i = 0; i < len; i++) {
-        char c = str[i];
-        if (c == '?') c = 'a' + 28;
-        else if (c == '!') c = 'a' + 27;
-        else if (c == '.') c = 'a' + 26;
-        if (c != ' ') {
-            addletterparticle(x + i * 20, y, c);
-        }
-    }
+void drawparticle(struct particle * particle) {
+    drawsprite(particle->x, particle->y, particle->sprite, particle->angle, 1.0, particle->clip);
+}
+
+
+void moveparticle(struct particle * particle, double rdeltatime) {
+    particle->x += particle->velx * rdeltatime;
+    particle->y += particle->vely * rdeltatime;
+    particle->velx += particle->accx - particle->drag * particle->velx * rdeltatime;
+    particle->vely += particle->accy - particle->drag * particle->vely * rdeltatime;
+    particle->lifetime -= rdeltatime;
 }
         
-
-//void drawimageex(double x, double y, SDL_T
-
 int main(int argc, char *argv[]) {
-    setspringmasses();
     head = malloc(sizeof(struct node));
     tail = malloc(sizeof(struct node));
     tail->next = NULL;
@@ -255,32 +349,37 @@ int main(int argc, char *argv[]) {
     SDL_Texture * sadface1 = IMG_LoadTexture(renderer, "sad2.png");
     SDL_Texture * tear = IMG_LoadTexture(renderer, "tear.png");
     SDL_Texture * alphabet = IMG_LoadTexture(renderer, "alphabet.png");
+    SDL_Texture * bubble = IMG_LoadTexture(renderer, "bubble.png");
     
     SDL_GetRendererOutputSize(renderer, &rswidth, &rsheight);
     sr = rswidth / SCREEN_WIDTH;
 
     // make sad face sprite
-    struct sprite * sadsprite;
     SDL_Texture ** sadimages = malloc(2 * sizeof(SDL_Texture *));
     sadimages[0] = sadface0;
     sadimages[1] = sadface1;
     makesprite(&sadsprite, sadimages);
 
     // make alphabet sprite
-    struct sprite * alphabetsprite;
     SDL_Texture ** alphabetimages = malloc(sizeof(SDL_Texture *));
     alphabetimages[0] = alphabet;
     makesprite(&alphabetsprite, alphabetimages);
     alphabetsprite->width = alphabetsprite->height;
 
-    struct sprite * tearsprite;
+    // make tear sprite
     SDL_Texture ** tearimages = malloc(sizeof(SDL_Texture *));
     tearimages[0] = tear;
     makesprite(&tearsprite, tearimages);
+    
+    // make bubble sprite
+    SDL_Texture ** bubbleimages = malloc(sizeof(SDL_Texture *));
+    bubbleimages[0] = bubble;
+    makesprite(&bubblesprite, bubbleimages);
 
+    setspringmasses();
     addspringparticles();
     drawword(100, 100, "click to cry");
-    
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);    
     SDL_Event event;
     int quit = 0;
     while (!quit) {
@@ -304,8 +403,8 @@ int main(int argc, char *argv[]) {
         if (steps > MAX_STEPS) steps = MAX_STEPS;
         for (int s = 0; s < steps + 2; s++) {
             double rdeltatime;
-            int onstep = 0;
-            int ondraw = 0;
+            onstep = 0;
+            ondraw = 0;
             if (s == 0) {
                 rdeltatime = leftovertime;
                 onstep = 1;
@@ -321,35 +420,19 @@ int main(int argc, char *argv[]) {
             struct node * prevnode = NULL;
             struct node * currnode = head;
 //            printf("rdeltatime %f\n", rdeltatime);
+// TODO check if this should be on step
             updatespringaccs();
-            double prevmody = 0, nextmody = 0;
+            prevmody = 0;
+            nextmody = 0;
             while (currnode->next != NULL) {
                 int destroyed = 0;
                 if (currnode->particle != NULL) {
                     // update particle
-                    currnode->particle->x += currnode->particle->velx * rdeltatime;
-                    currnode->particle->y += currnode->particle->vely * rdeltatime;
-                    currnode->particle->velx += currnode->particle->accx - currnode->particle->drag * currnode->particle->velx * rdeltatime;
-                    currnode->particle->vely += currnode->particle->accy - currnode->particle->drag * currnode->particle->vely * rdeltatime;
-                    currnode->particle->lifetime -= rdeltatime;
+                    moveparticle(currnode->particle, rdeltatime);
+                    if (currnode->particle->step != NULL) {
+                        currnode->particle->step(currnode->particle);
+                    }
                     if (currnode->particle->type == T_TEAR) {
-                        // figure out which water node to push
-                        double pos = currnode->particle->x;
-                        pos += SCREEN_WIDTH / NUM_MASSES / 2;
-                        int index = (int) (pos / (SCREEN_WIDTH / (NUM_MASSES - 1)));
-//                        printf("index%d\n", index);
-
-                        if (index >= 0 && index <= NUM_MASSES - 1) {
-                            if (springmasses[index].y < currnode->particle->y) {
-                                currnode->particle->lifetime = -1;
-                                if (index != 0 && index != NUM_MASSES - 1)
-                                    springmasses[index].vely += 0.05;
-                                springmasses[0].y -= 0.01;
-                                prevmody = doublemod(springmasses[NUM_MASSES - 1].y, WORD_INTERVAL);
-                                springmasses[NUM_MASSES - 1].y -= 0.01;
-                                nextmody = doublemod(springmasses[NUM_MASSES - 1].y, WORD_INTERVAL);
-                            }
-                        }
                     }
                     if (currnode->particle->type != T_WATER && currnode->particle->lifetime < 0) {
                         prevnode->next = currnode->next;
@@ -368,19 +451,11 @@ int main(int argc, char *argv[]) {
                                 sprite = tearsprite;
                             } else if (currnode->particle->type == T_LETTER) {
                                 sprite = alphabetsprite;
-                                currnode->particle->alpha = (double) (currnode->particle->lifetime / 10000.0 * 255);
                             } else {
                                 sprite = tearsprite;
                             }
-
-                            SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
-                            SDL_SetTextureColorMod(sprite->images[sprite->counter], currnode->particle->r, currnode->particle->g, currnode->particle->b);
-                            SDL_SetTextureAlphaMod(sprite->images[sprite->counter], currnode->particle->alpha);
-                            double angle = 0;
-                            if (currnode->particle->type == T_TEAR) {
-                                angle = atan2(currnode->particle->vely, currnode->particle->velx);
-                            }
-                            drawsprite(currnode->particle->x, currnode->particle->y, sprite, angle, 1.0, currnode->particle->clip);
+                            setcolors(currnode->particle);
+                            drawparticle(currnode->particle);
                         }
                     }
                 }
@@ -400,17 +475,13 @@ int main(int argc, char *argv[]) {
                 int particlesperhold = 1;
                 for (int i = 0; i < particlesperhold; i++) {
                     // prevnode is now the last node
-                    addparticle(maketearparticle(clickx, clicky));
+                    if (isunderwater(clickx, clicky))
+                        addparticle(makebubbleparticle(clickx, clicky));
+                    else
+                        addparticle(maketearparticle(clickx, clicky));
                }
             }
-            if (nextmody > prevmody) {
-                if (!gameover)
-                    drawword(clickx - 100, clicky - 50, messages[messagecounter]);
-                if (messagecounter < WORD_AMOUNT - 1)
-                    messagecounter++;
-                else
-                    gameover = 1;
-            }
+            
         }
         leftovertime = TIME_PER_STEP - extratime;
         SDL_RenderPresent(renderer);
