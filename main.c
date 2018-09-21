@@ -7,6 +7,7 @@
 #define SCREEN_WIDTH 1080
 #define SCREEN_HEIGHT 720
 #define VSCALAR 20000000
+#define SPRING_SCALAR 1700
 #define PI 3.14159265
 #define SIM_FPS 300
 #define TIME_PER_STEP (double) (1000.0 / SIM_FPS)
@@ -30,14 +31,14 @@ char * messages[WORD_AMOUNT] = {
     "you are doing great",
     "the water is rising...",
     "one hundred point bonus!",
-    "let it out",
+    "...let it out...",
     "youre a natural",
     "feel better?",
-    "it doesnt change",
+    "i hope so regardless",
     "?",
-    "can you even win?",
-    "are you having fun",
-    "thanks",
+    "closing in",
+    "are you having fun?",
+    "...",
     "made by cole"
 };
 
@@ -124,24 +125,29 @@ void updatespringaccs() {
         double yleft = springmasses[i - 1].y;
         double ymiddle = springmasses[i].y;
         double yright = springmasses[i + 1].y;
-        springmasses[i].accy = ((yleft - ymiddle) + (yright - ymiddle)) / 1000;
+        springmasses[i].accy = ((yleft - ymiddle) + (yright - ymiddle)) / SPRING_SCALAR;
     }
+}
+
+void addparticle(struct particle * particle) {
+    struct node * newnode = malloc(sizeof(struct node));
+    newnode->particle = particle;
+    newnode->next = head->next;
+    head->next = newnode;
 }
 
 void addspringparticles() {
+// TODO check if i need this 
     struct node * currnode = head;
     for (int i = 0; i < NUM_MASSES; i++) {
-        struct node * newnode = malloc(sizeof(struct node));
-        newnode->particle = springmasses + i;
-        newnode->next = head->next;
-        head->next = newnode;
+        addparticle(springmasses + i);
     }
 }
 
-void addletterparticle(int x, int y, char c) {
-    struct node * newnode = malloc(sizeof(struct node));
-    struct particle * particle = malloc(sizeof(struct particle));
+// make these double
+struct particle * makeletterparticle(double x, double y, char c) {
     int clip = c - 'a';
+    struct particle * particle = malloc(sizeof(struct particle));
     *particle = (struct particle) {
         .x = x,
         .y = y,
@@ -158,6 +164,35 @@ void addletterparticle(int x, int y, char c) {
         .type = T_LETTER,
         .clip = clip
     };
+    return particle;
+}
+
+struct particle * maketearparticle(double x, double y) {
+    struct particle * particle = malloc(sizeof(struct particle));
+    double randdir = randdouble() * 2 * PI;
+    double randspeed = randdouble();
+    *particle = (struct particle) {
+        .x = x,
+        .y = y,
+        .velx = cos(randdir) * randspeed,
+        .vely = sin(randdir) * randspeed,
+        .accx = 0,
+        .accy = 0.01,
+        .drag = 0.005,
+        .lifetime = 1000 * randdouble() * 1000,
+        .alpha = 100,
+        .r = pcolor[0],
+        .g = pcolor[1],
+        .b = pcolor[2],
+        .type = T_TEAR,
+        .clip = 0
+    };
+    return particle;
+}
+
+void addletterparticle(int x, int y, char c) {
+    struct node * newnode = malloc(sizeof(struct node));
+    struct particle * particle = makeletterparticle(x, y, c);
     newnode->particle = particle;
     // TODO make an add particle function
     newnode->next = head->next;
@@ -308,7 +343,7 @@ int main(int argc, char *argv[]) {
                             if (springmasses[index].y < currnode->particle->y) {
                                 currnode->particle->lifetime = -1;
                                 if (index != 0 && index != NUM_MASSES - 1)
-                                    springmasses[index].y += 10;
+                                    springmasses[index].vely += 0.05;
                                 springmasses[0].y -= 0.01;
                                 prevmody = doublemod(springmasses[NUM_MASSES - 1].y, WORD_INTERVAL);
                                 springmasses[NUM_MASSES - 1].y -= 0.01;
@@ -362,36 +397,13 @@ int main(int argc, char *argv[]) {
 
             // cry
             if (helddown && onstep && !gameover) {
-                int particlesperhold = 3;
+                int particlesperhold = 1;
                 for (int i = 0; i < particlesperhold; i++) {
                     // prevnode is now the last node
-                    struct node * newnode = malloc(sizeof(struct node));
-                    struct particle * particle = malloc(sizeof(struct particle));
-                    // TODO these randomizations should be determined by the particle type (or spawner?)
-                    // TODO change to assign with curly bracess
-                    double randdir = randdouble() * 2 * PI;
-                    double randspeed = randdouble() * 10;
-                    particle->x = (double) clickx;
-                    particle->y = (double) clicky;
-                    particle->velx = cos(randdir) * (double) randspeed / 10;
-                    particle->vely = sin(randdir) * (double) randspeed / 10;
-                    particle->accx = 0;
-                    particle->accy = 0.01;
-                    particle->drag = 0.005;
-                    particle->lifetime = 1000 + randdouble() * 1000;
-                    particle->alpha = 100;
-                    particle->r = pcolor[0];
-                    particle->g = pcolor[1];
-                    particle->b = pcolor[2];
-                    particle->type = T_TEAR;
-                    particle->clip = 0;
-                    newnode->next = tail;
-                    newnode->particle = particle;
-                    prevnode->next = newnode;
-                }
+                    addparticle(maketearparticle(clickx, clicky));
+               }
             }
             if (nextmody > prevmody) {
-                //drawword(100, 100, "test");
                 if (!gameover)
                     drawword(clickx - 100, clicky - 50, messages[messagecounter]);
                 if (messagecounter < WORD_AMOUNT - 1)
