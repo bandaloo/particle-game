@@ -28,14 +28,14 @@ int helddown;
 int gameover = 0;
 int onstep, ondraw;
 long unsigned int timediff, currtime, prevtime = 0;
-double extratime;
 double deltatime;
-double leftovertime = 0;
 double prevmody, nextmody;
 struct node * head;
 struct node * tail;
 SDL_Window * window;
 SDL_Renderer * renderer;
+
+double steptime = TIME_PER_STEP;
 
 struct sprite * sadsprite, * alphabetsprite, * tearsprite, * bubblesprite;
 
@@ -398,30 +398,39 @@ int main(int argc, char *argv[]) {
         timediff = currtime - prevtime;
         prevtime = currtime;
         deltatime = (double) (timediff * 1000 / (double) SDL_GetPerformanceFrequency());
-        int steps = (int) ((deltatime - leftovertime) / TIME_PER_STEP);
-        extratime = deltatime - leftovertime - steps * TIME_PER_STEP;
-        if (steps > MAX_STEPS) steps = MAX_STEPS;
-        for (int s = 0; s < steps + 2; s++) {
-            double rdeltatime;
+        if (deltatime > 100) deltatime = 100;
+        double frametime = deltatime;
+        double rdeltatime;
+
+        
+        //if (steps > MAX_STEPS) steps = MAX_STEPS;
+        //printf("start\n");
+        while (frametime != 0.0) {
             onstep = 0;
             ondraw = 0;
-            if (s == 0) {
-                rdeltatime = leftovertime;
+            if (steptime < frametime) {
+                frametime -= steptime;
+                rdeltatime = steptime;
+                steptime = TIME_PER_STEP;
                 onstep = 1;
-            } else if (s == steps + 1) {
-                rdeltatime = extratime;
-                ondraw = 1;
             } else {
-                rdeltatime = TIME_PER_STEP;
-                onstep = 1;
+                steptime -= frametime;
+                rdeltatime = frametime;
+                frametime = 0.0;
+                ondraw = 1;
             }
+//            printf("steptime %lf\n", steptime);
+//            printf("frametime %lf\n", frametime);
+//            printf("rdeltatime %lf\n", rdeltatime);
             SDL_SetRenderDrawColor(renderer, bgcolor[0], bgcolor[1], bgcolor[2], 255);
             SDL_RenderClear(renderer);
             struct node * prevnode = NULL;
             struct node * currnode = head;
 //            printf("rdeltatime %f\n", rdeltatime);
 // TODO check if this should be on step
-            updatespringaccs();
+            if (onstep) {
+                updatespringaccs();
+            }
             prevmody = 0;
             nextmody = 0;
             while (currnode->next != NULL) {
@@ -483,7 +492,6 @@ int main(int argc, char *argv[]) {
             }
             
         }
-        leftovertime = TIME_PER_STEP - extratime;
         SDL_RenderPresent(renderer);
     }
     SDL_DestroyWindow(window);
